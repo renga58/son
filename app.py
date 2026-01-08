@@ -6,36 +6,37 @@ import json
 import os
 from datetime import datetime
 from functools import wraps
-from flask import Flask, render_template, jsonify, request, redirect, url_for, flash, abort
+from flask import Flask, render_template, jsonify, request, redirect, url_for, flash
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 
 app = Flask(__name__)
 
-
-# --- GÜVENLİK ANAHTARI ---
+# --- AYARLAR VE GÜVENLİK ---
+# 1. Web sitesi oturum güvenliği için (Tarayıcı çerezleri)
 app.secret_key = 'bu_cok_gizli_bir_anahtar_flashodds_pro_v4'
 
-# --- FLASK LOGIN AYARLARI ---
+# 2. Telegram Botunun siteye girmesi için VIP Şifresi (Bot.py ile AYNI olmalı)
+BOT_API_KEY = "190358"
+
+DB_NAME = "maclar.db"
+TEAMS_FILE = "teams.json"
+
+# --- FLASK LOGIN KURULUMU ---
 login_manager = LoginManager()
 login_manager.init_app(app)
-login_manager.login_view = 'login' # Giriş yapılmamışsa buraya atar
+login_manager.login_view = 'login' # Giriş yapılmamışsa buraya yönlendir
 
+# --- BROWSER CACHE ENGELLEME (Geri Tuşu Koruması) ---
 @app.after_request
 def add_header(response):
-    """
-    Tarayıcının sayfaları hafızaya almasını engeller.
-    Böylece çıkış yapınca 'Geri' tuşuna basan kişi eski sayfayı göremez,
-    tarayıcı sayfayı sunucudan tekrar ister, sunucu da 'Giriş yap' der.
-    """
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    """Tarayıcının sayfaları hafızaya almasını engeller."""
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, public, max-age=0"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
 
-# --- AYARLAR ---
-DB_NAME = "maclar.db"
-TEAMS_FILE = "teams.json"
+# --- SOFASCORE AYARLARI ---
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Referer": "https://www.sofascore.com/",
@@ -43,6 +44,7 @@ HEADERS = {
     "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
     "Cache-Control": "max-age=0"
 }
+
 LEAGUE_MAP = {
     "Türkiye Süper Lig": 52, "Türkiye 1.Lig": 53, "Premier Lig": 17, "LaLiga": 8,
     "Bundesliga": 35, "Serie A": 23, "Ligue1": 34, "Hollanda Eredivisie": 37,
@@ -83,7 +85,7 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# --- VERİTABANI BAŞLATMA & ADMIN OLUŞTURMA ---
+# --- VERİTABANI BAŞLATMA ---
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -97,7 +99,7 @@ def init_db():
                   status TEXT DEFAULT 'pending', result INTEGER DEFAULT -1,
                   all_probs TEXT)''')
     
-    # Kullanıcılar Tablosu (Role ve Logo eklendi)
+    # Kullanıcılar Tablosu
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   username TEXT UNIQUE,
@@ -105,14 +107,10 @@ def init_db():
                   role TEXT DEFAULT 'user',
                   logo TEXT DEFAULT '')''')
     
-    # --- ADMIN VAR MI KONTROL ET, YOKSA OLUŞTUR ---
+    # Varsayılan Admini Kontrol Et
     c.execute("SELECT * FROM users WHERE username = 'kemir'")
-    admin_exists = c.fetchone()
-    
-    if not admin_exists:
-        # Şifreyi güvenli hale getiriyoruz
+    if not c.fetchone():
         hashed_pw = generate_password_hash("2000532694Aa/")
-        # Admin logosu olarak kral tacı koyalım örnek olarak
         admin_logo = "https://cdn-icons-png.flaticon.com/512/2825/2825688.png"
         c.execute("INSERT INTO users (username, password, role, logo) VALUES (?, ?, 'admin', ?)", 
                   ('kemir', hashed_pw, admin_logo))
@@ -121,18 +119,17 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- YARDIMCI FONKSİYONLAR (Takım yükleme, API vb.) ---
-def load_teams():
-    if os.path.exists(TEAMS_FILE):
-        with open(TEAMS_FILE, "r", encoding="utf-8") as f: return json.load(f)
-    return {}
+init_db()
+TEAMS_DATA = {}
+if os.path.exists(TEAMS_FILE):
+    with open(TEAMS_FILE, "r", encoding="utf-8") as f: TEAMS_DATA = json.load(f)
 
+# --- YARDIMCI FONKSİYONLAR ---
 def get_team_id(url):
     try: return int(re.findall(r"/(\d+)$", url)[0])
     except: return None
 
 def get_sofascore_stats(team_url, is_home):
-    # ... (Önceki kodların aynısı - Kısaltıldı) ...
     tid = get_team_id(team_url)
     default = {"gf": 1.3, "ga": 1.3, "form": 1.0}
     if not tid: return default
@@ -163,15 +160,10 @@ def calculate_odds_impact(o, c):
         return ((o-c)/o)*0.5 if o>0 else 0
     except: return 0
 
-# --- PROJE BAŞLATMA ---
-init_db()
-TEAMS_DATA = load_teams()
-
-# --- ROTALAR ---
+# --- SAYFA ROTALARI (ROUTES) ---
 
 @app.route('/')
 def index():
-    # Giriş yapmamışsa login'e at, yapmışsa analize
     if current_user.is_authenticated:
         return redirect(url_for('analyze_page'))
     return redirect(url_for('login'))
@@ -206,7 +198,7 @@ def logout():
     logout_user()
     return redirect(url_for('login'))
 
-# --- ADMIN PANELİ (Sadece Admin Girebilir) ---
+# --- ADMIN ROUTES ---
 @app.route('/admin')
 @login_required
 @admin_required
@@ -224,22 +216,16 @@ def admin_panel():
 def add_user():
     username = request.form['username']
     password = request.form['password']
-    role = request.form.get('role', 'user') # Varsayılan user
     logo = request.form.get('logo', '')
-
     hashed_pw = generate_password_hash(password)
-    
     try:
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
-        c.execute("INSERT INTO users (username, password, role, logo) VALUES (?, ?, ?, ?)", 
-                  (username, hashed_pw, role, logo))
+        c.execute("INSERT INTO users (username, password, role, logo) VALUES (?, ?, 'user', ?)", (username, hashed_pw, logo))
         conn.commit()
         conn.close()
-        flash(f"{username} başarıyla eklendi.", "success")
-    except:
-        flash("Bu kullanıcı adı zaten var!", "error")
-    
+        flash(f"{username} eklendi.", "success")
+    except: flash("Kullanıcı adı zaten var!", "error")
     return redirect(url_for('admin_panel'))
 
 @app.route('/admin/delete_user/<int:user_id>')
@@ -249,10 +235,8 @@ def delete_user(user_id):
     if user_id == current_user.id:
         flash("Kendini silemezsin!", "error")
         return redirect(url_for('admin_panel'))
-        
     conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("DELETE FROM users WHERE id=?", (user_id,))
+    conn.execute("DELETE FROM users WHERE id=?", (user_id,))
     conn.commit()
     conn.close()
     flash("Kullanıcı silindi.", "success")
@@ -264,24 +248,21 @@ def delete_user(user_id):
 def edit_user():
     user_id = request.form['user_id']
     username = request.form['username']
-    password = request.form['password'] # Boşsa değişmez
+    password = request.form['password']
     logo = request.form['logo']
-    
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    
-    if password.strip(): # Şifre girilmişse güncelle
+    if password.strip():
         hashed_pw = generate_password_hash(password)
         c.execute("UPDATE users SET username=?, password=?, logo=? WHERE id=?", (username, hashed_pw, logo, user_id))
-    else: # Sadece isim ve logo güncelle
+    else:
         c.execute("UPDATE users SET username=?, logo=? WHERE id=?", (username, logo, user_id))
-        
     conn.commit()
     conn.close()
-    flash("Kullanıcı güncellendi.", "success")
+    flash("Güncellendi.", "success")
     return redirect(url_for('admin_panel'))
 
-# --- ANA SAYFALAR (Login Required) ---
+# --- APP ROUTES ---
 @app.route('/analyze')
 @login_required
 def analyze_page():
@@ -305,18 +286,25 @@ def dashboard_page():
     conn.close()
     return render_template('dashboard.html', pending=pending, finished=finished, current_user=current_user)
 
-# --- API ---
+# --- API ROTALARI (BOT İÇİN GÜVENLİK EKLİ) ---
+
 @app.route('/api/get_fixtures', methods=['POST'])
 def get_fixtures():
-    # ... (Fixture kodu aynı) ...
+    # 1. API KEY KONTROLÜ (Bot İçin)
+    api_key = request.headers.get('X-Api-Key')
+    if api_key != BOT_API_KEY:
+        # 2. LOGIN KONTROLÜ (İnsan İçin)
+        if not current_user.is_authenticated:
+            return jsonify({"success": False, "msg": "Yetkisiz Erişim! VIP Kartı Yok."}), 401
+
     data = request.json
     league_id = LEAGUE_MAP.get(data.get('league'))
     if not league_id: return jsonify({"success": False, "msg": "Lig yok"}), 400
     try:
-        season_url = f"https://api.sofascore.com/api/v1/unique-tournament/{league_id}/seasons"
-        season_id = requests.get(season_url, headers=HEADERS).json()['seasons'][0]['id']
-        fix_url = f"https://api.sofascore.com/api/v1/unique-tournament/{league_id}/season/{season_id}/events/next/0"
-        events = requests.get(fix_url, headers=HEADERS).json().get('events', [])
+        r_s = requests.get(f"https://api.sofascore.com/api/v1/unique-tournament/{league_id}/seasons", headers=HEADERS)
+        sid = r_s.json()['seasons'][0]['id']
+        r_m = requests.get(f"https://api.sofascore.com/api/v1/unique-tournament/{league_id}/season/{sid}/events/next/0", headers=HEADERS)
+        events = r_m.json().get('events', [])
         fixtures = []
         for e in events:
             d = datetime.fromtimestamp(e.get('startTimestamp', 0)).strftime("%d.%m %H:%M")
@@ -326,12 +314,18 @@ def get_fixtures():
 
 @app.route('/api/analyze', methods=['POST'])
 def api_analyze():
-    # ... (Analyze kodu aynı) ...
+    # GÜVENLİK KONTROLÜ
+    api_key = request.headers.get('X-Api-Key')
+    if api_key != BOT_API_KEY:
+        if not current_user.is_authenticated:
+            return jsonify({"error": "Yetkisiz Erişim!"}), 401
+
     data = request.json
     league = data.get('league')
     home_name = data.get('home')
     away_name = data.get('away')
     odds = data.get('odds', {})
+    
     try:
         home_url = TEAMS_DATA[league][home_name]["url"]
         away_url = TEAMS_DATA[league][away_name]["url"]
@@ -393,9 +387,11 @@ def update_score():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT prediction_market FROM matches WHERE id=?", (match_id,))
-    prediction = c.fetchone()[0]
+    row = c.fetchone()
+    if not row: return jsonify({"success": False, "msg": "Maç yok"}), 404
+    prediction = row[0]
+    
     is_win = 0
-    # Basit kazanma mantığı
     if prediction=="MS 1" and hg>ag: is_win=1
     elif prediction=="MS 2" and ag>hg: is_win=1
     elif prediction=="Beraberlik" and hg==ag: is_win=1
@@ -418,10 +414,7 @@ def delete_match():
     conn.close()
     return jsonify({"success": True})
 
-if __name__ == '__main__':
-    app.run(debug=False)
-    
-    # app.py dosyasının EN ALTI böyle olmalı:
+# --- RENDER PORT AYARI ---
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)

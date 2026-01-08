@@ -2,11 +2,18 @@ import logging
 import requests
 import json
 from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 
 # --- AYARLAR ---
-TOKEN = "8284888584:AAF7yyeWAQ3jOFUJavCqjQE2GzD7Nlx58sg"  # <--- BURAYI DOLDUR!
-API_URL = "http://127.0.0.1:5000/api"      # Flask uygulamanın adresi
+# 1. BotFather'dan aldığın Token'ı buraya yapıştır
+TOKEN = "8284888584:AAF7yyeWAQ3jOFUJavCqjQE2GzD7Nlx58sg" 
+
+# 2. Render Site Linkini buraya yapıştır (Sonuna /api EKLEMEYİ UNUTMA)
+# Örnek: "https://flashodds-pro.onrender.com/api"
+API_URL = "https://hananaliz.onrender.com/api" 
+
+# 3. Siteye girmek için VIP Kartı Şifresi (app.py ile AYNI OLMALI)
+BOT_API_KEY = "190358"
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -29,17 +36,18 @@ async def fikstur(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Lütfen lig adı girin.\nÖrnek: `/fikstur Premier Lig`", parse_mode='Markdown')
         return
 
-    # Kullanıcının yazdığı lig adını birleştir (örn: Premier Lig)
     lig_adi = " ".join(context.args)
-    
     await update.message.reply_text(f"⏳ **{lig_adi}** fikstürü çekiliyor...", parse_mode='Markdown')
 
     try:
-        # Flask API'ye istek at
-        response = requests.post(f"{API_URL}/get_fixtures", json={"league": lig_adi})
+        # VIP KARTI (Header) Hazırla
+        headers = {"X-Api-Key": BOT_API_KEY}
+        
+        # Siteye İstek At (Kartı göstererek)
+        response = requests.post(f"{API_URL}/get_fixtures", json={"league": lig_adi}, headers=headers)
         
         if response.status_code != 200:
-            await update.message.reply_text("❌ Sunucu hatası veya lig bulunamadı.")
+            await update.message.reply_text(f"❌ Sunucu Hatası: {response.status_code}")
             return
 
         data = response.json()
@@ -54,26 +62,27 @@ async def fikstur(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         msg = f"📅 **{lig_adi} - Fikstür**\n\n"
         for match in fixtures:
-            # Kolay kopyalama için komut hazırla
             cmd = f"`/analiz {lig_adi} | {match['home']} | {match['away']}`"
-            msg += f"🔸 {match['date']} - {match['home']} vs {match['away']}\nAnaliz için tıkla 👉 {cmd}\n\n"
+            msg += f"🔸 {match['date']} - {match['home']} vs {match['away']}\nAnaliz 👉 {cmd}\n\n"
 
-        # Mesaj çok uzunsa bölmek gerekebilir ama şimdilik tek parça atalım
-        await update.message.reply_text(msg, parse_mode='Markdown')
+        # Mesaj çok uzunsa Telegram hata verebilir, şimdilik 4000 karakter sınırı yokmuş gibi atıyoruz
+        if len(msg) > 4000:
+            await update.message.reply_text(msg[:4000] + "\n... (Liste çok uzun, kesildi)", parse_mode='Markdown')
+        else:
+            await update.message.reply_text(msg, parse_mode='Markdown')
 
     except Exception as e:
         await update.message.reply_text(f"❌ Bağlantı hatası: {str(e)}")
 
 async def analiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Gelen mesajı '|' işaretine göre böl
     text = " ".join(context.args)
     parts = text.split("|")
 
     if len(parts) != 3:
         await update.message.reply_text(
             "⚠️ Hatalı format!\n"
-            "Doğru kullanım: `/analiz Lig Adı | Ev Sahibi | Deplasman`\n"
-            "Not: Araya '|' (dik çizgi) koymayı unutma.", 
+            "Doğru kullanım: `/analiz Lig | Ev | Dep`\n"
+            "Örnek: `/analiz LaLiga | Real Madrid | Barcelona`", 
             parse_mode='Markdown'
         )
         return
@@ -82,13 +91,9 @@ async def analiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ev = parts[1].strip()
     dep = parts[2].strip()
 
-    # KONTROL 1: Bakalım Telegram mesajı bota ulaşıyor mu?
-    print(f"Telegram'dan istek geldi: Lig={lig}, Ev={ev}, Dep={dep}")
-
-    await update.message.reply_text(f"🧠 **{ev} vs {dep}** analiz ediliyor... Lütfen bekle.", parse_mode='Markdown')
+    await update.message.reply_text(f"🧠 **{ev} vs {dep}** analiz ediliyor...", parse_mode='Markdown')
 
     try:
-        # Flask API'ye istek at
         payload = {
             "league": lig,
             "home": ev,
@@ -96,16 +101,19 @@ async def analiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "odds": {} 
         }
         
-        response = requests.post(f"{API_URL}/analyze", json=payload)
+        # VIP KARTI (Header) Hazırla
+        headers = {"X-Api-Key": BOT_API_KEY}
 
-        # >>>> SENİN SORDUĞUN SATIR BURAYA GELECEK <<<<
-        print(f"API Cevabı: {response.status_code} - {response.text}")
-        # >>>> BURADA BİTİYOR <<<<
-
+        # Siteye İstek At (Kartı göstererek)
+        response = requests.post(f"{API_URL}/analyze", json=payload, headers=headers)
         data = response.json()
 
         if "error" in data:
-            await update.message.reply_text(f"❌ Hata: {data['error']}\nTakım ismini kontrol et.")
+            # Yetki hatası mı yoksa takım mı bulunamadı?
+            msg = data['error']
+            if response.status_code == 401:
+                msg = "🔐 Yetkisiz Giriş! API Key hatalı."
+            await update.message.reply_text(f"❌ Hata: {msg}")
             return
 
         # Rapor Hazırla
@@ -114,12 +122,12 @@ async def analiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"----------------------------\n"
         
         if "Tahmini Skor" in data:
-            msg += f"🎯 **Tahmini Skor:** {data['Tahmini Skor']}\n"
+            msg += f"🎯 **Skor:** {data['Tahmini Skor']}\n"
             del data["Tahmini Skor"]
         
         msg += f"----------------------------\n"
 
-        # En yüksek ihtimali bulmak için sıralama
+        # Yüzdeleri sırala (Büyükten küçüğe)
         sorted_items = sorted(data.items(), key=lambda item: item[1]['percent'], reverse=True)
 
         for key, value in sorted_items:
@@ -133,8 +141,7 @@ async def analiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode='Markdown')
 
     except Exception as e:
-        print(f"HATA OLUŞTU: {e}") # Konsola hatayı bas
-        await update.message.reply_text(f"❌ Sunucuya bağlanılamadı. `app.py` çalışıyor mu?\nHata: {str(e)}")
+        await update.message.reply_text(f"❌ Sunucuya bağlanılamadı.\nHata: {str(e)}")
 
 if __name__ == '__main__':
     application = ApplicationBuilder().token(TOKEN).build()
@@ -143,5 +150,5 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('fikstur', fikstur))
     application.add_handler(CommandHandler('analiz', analiz))
     
-    print("🤖 Bot çalışıyor...")
+    print("🤖 Bot çalışıyor... (Render'a bağlanıyor)")
     application.run_polling()
