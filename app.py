@@ -1,4 +1,5 @@
 import requests
+import cloudscraper # 🔥 BU EKLENDİ
 import re
 import math
 import sqlite3
@@ -12,24 +13,20 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, log
 
 app = Flask(__name__)
 
-# --- AYARLAR VE GÜVENLİK ---
+# --- AYARLAR ---
 app.secret_key = 'bu_cok_gizli_bir_anahtar_flashodds_pro_v4'
-BOT_API_KEY = "190358" # Botun VIP Şifresi
+BOT_API_KEY = "190358"
 DB_NAME = "maclar.db"
 TEAMS_FILE = "teams.json"
 
-# --- MASKELENMİŞ HEADERS (Chrome Gibi Görünmesi İçin) ---
+# --- HEADERS ---
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
     "Accept": "*/*",
     "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
     "Referer": "https://www.sofascore.com/",
     "Origin": "https://www.sofascore.com",
-    "Connection": "keep-alive",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-site",
-    "Cache-Control": "max-age=0"
+    "Connection": "keep-alive"
 }
 
 LEAGUE_MAP = {
@@ -49,11 +46,8 @@ login_manager.login_view = 'login'
 @app.after_request
 def add_header(response):
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, public, max-age=0"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
     return response
 
-# --- KULLANICI MODELİ ---
 class User(UserMixin):
     def __init__(self, id, username, password, role='user', logo=''):
         self.id = id
@@ -69,8 +63,7 @@ def load_user(user_id):
     c.execute("SELECT * FROM users WHERE id = ?", (user_id,))
     user = c.fetchone()
     conn.close()
-    if user:
-        return User(id=user[0], username=user[1], password=user[2], role=user[3], logo=user[4])
+    if user: return User(id=user[0], username=user[1], password=user[2], role=user[3], logo=user[4])
     return None
 
 def admin_required(f):
@@ -82,7 +75,6 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# --- VERİTABANI ---
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -93,21 +85,17 @@ def init_db():
                   actual_hg INTEGER, actual_ag INTEGER, 
                   status TEXT DEFAULT 'pending', result INTEGER DEFAULT -1,
                   all_probs TEXT)''')
-    
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   username TEXT UNIQUE,
                   password TEXT,
                   role TEXT DEFAULT 'user',
                   logo TEXT DEFAULT '')''')
-    
     c.execute("SELECT * FROM users WHERE username = 'kemir'")
     if not c.fetchone():
         hashed_pw = generate_password_hash("2000532694Aa/")
         admin_logo = "https://cdn-icons-png.flaticon.com/512/2825/2825688.png"
-        c.execute("INSERT INTO users (username, password, role, logo) VALUES (?, ?, 'admin', ?)", 
-                  ('kemir', hashed_pw, admin_logo))
-        print("👑 Admin kullanıcısı (kemir) oluşturuldu!")
+        c.execute("INSERT INTO users (username, password, role, logo) VALUES (?, ?, 'admin', ?)", ('kemir', hashed_pw, admin_logo))
     conn.commit()
     conn.close()
 
@@ -116,74 +104,39 @@ TEAMS_DATA = {}
 if os.path.exists(TEAMS_FILE):
     with open(TEAMS_FILE, "r", encoding="utf-8") as f: TEAMS_DATA = json.load(f)
 
-# --- BU İKİ FONKSİYONU ESKİLERİYLE DEĞİŞTİR ---
+# --- 🛠️ DÜZELTİLMİŞ HELPER FONKSİYONLAR ---
 
 def get_team_id(url):
-    """
-    URL içindeki ID'yi Regex ile garanti şekilde alır.
-    https://www.sofascore.com/tr/football/team/arsenal/42 -> 42 olarak döner.
-    """
     try:
-        # 1. Linkin sonundaki boşlukları temizle
-        url = url.strip()
-        
-        # 2. Regex ile linkin sonundaki sayıyı yakala (En sağlam yöntem)
-        # Bu kod "/12345" veya "/12345/" şeklindeki her şeyi bulur.
+        url = url.strip().rstrip('/')
         match = re.search(r'/(\d+)(?:/)?$', url)
-        
-        if match:
-            found_id = int(match.group(1))
-            # print(f"🆔 ID BULUNDU: {found_id} (Linkten: {url})") # İstersen bunu açıp loga bakabilirsin
-            return found_id
-        else:
-            print(f"❌ ID BULUNAMADI: {url} linkinde sayı yok.")
-            return None
-    except Exception as e:
-        print(f"❌ ID AYIKLAMA HATASI: {str(e)}")
+        if match: return int(match.group(1))
         return None
+    except: return None
 
+# 🔥 CLOUDSCRAPER KULLANAN YENİ FONKSİYON 🔥
 def get_sofascore_stats(team_url, is_home):
     tid = get_team_id(team_url)
-    
-    # Varsayılan değerler (Veri çekemezsek 1-1 çıkmasının sebebi bu)
     default = {"gf": 1.3, "ga": 1.3, "form": 1.0}
     
-    if not tid:
-        print(f"⚠️ ID YOK: {team_url} için ID bulunamadı, varsayılan dönülüyor.")
-        return default
+    if not tid: return default
         
     try:
-        # API URL'si
         url = f"https://api.sofascore.com/api/v1/team/{tid}/performance"
         
-        # Sofascore'u kandıran Chrome Başlıkları
-        fake_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer": "https://www.sofascore.com/",
-            "Origin": "https://www.sofascore.com",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
-        }
-
-        # İsteği at (Timeout 15 saniye)
-        r = requests.get(url, headers=fake_headers, timeout=15)
+        # Render'da engeli aşmak için Cloudscraper kullanıyoruz
+        scraper = cloudscraper.create_scraper()
+        r = scraper.get(url) # requests yerine scraper
         
-        if r.status_code == 403:
-            print(f"⛔ ENGEL (403): Sofascore VDS IP'sini engelledi. ID: {tid}")
-            return default
-            
         if r.status_code != 200:
-            print(f"❌ API HATASI: Kod {r.status_code} - ID: {tid}")
+            print(f"Sofascore Hatası: {r.status_code}")
             return default
             
         data = r.json()
-        matches = data.get("events", [])[:10] # Son 10 maçı al
+        matches = data.get("events", [])[:10]
         
-        if not matches:
-            print(f"⚠️ MAÇ YOK: ID {tid} için maç verisi gelmedi.")
-            return default
+        if not matches: return default
             
-        # İstatistik Hesaplama
         gf, ga, pts = 0, 0, 0
         match_count = len(matches)
         
@@ -193,28 +146,19 @@ def get_sofascore_stats(team_url, is_home):
             h_s = e["homeScore"].get("current", 0)
             a_s = e["awayScore"].get("current", 0)
             
-            if e["homeTeam"]["id"] == tid: 
-                my, opp = h_s, a_s
-            else: 
-                my, opp = a_s, h_s
-                
-            gf += my
-            ga += opp
-            
+            if e["homeTeam"]["id"] == tid: my, opp = h_s, a_s
+            else: my, opp = a_s, h_s
+            gf += my; ga += opp
             if my > opp: pts += 3
             elif my == opp: pts += 1
             
-        stats = {
+        return {
             "gf": gf / match_count,
             "ga": ga / match_count,
             "form": 0.8 + (pts / match_count / 3) * 0.4
         }
-        
-        # print(f"✅ İSTATİSTİK ALINDI: ID {tid} -> GF: {stats['gf']:.2f}")
-        return stats
-
     except Exception as e:
-        print(f"❌ KRİTİK HATA: {str(e)}")
+        print(f"Hata: {str(e)}")
         return default
 
 def poisson(xg, g):
@@ -226,7 +170,7 @@ def calculate_odds_impact(o, c):
         return ((o-c)/o)*0.5 if o>0 else 0
     except: return 0
 
-# --- SAYFA ROTALARI ---
+# --- ROTALAR ---
 
 @app.route('/')
 def index():
@@ -257,7 +201,6 @@ def logout():
     logout_user()
     return redirect(url_for('login'))
 
-# --- ADMIN ROUTES ---
 @app.route('/admin')
 @login_required
 @admin_required
@@ -284,7 +227,7 @@ def add_user():
         conn.commit()
         conn.close()
         flash(f"{username} eklendi.", "success")
-    except: flash("Kullanıcı adı zaten var!", "error")
+    except: flash("Hata oluştu", "error")
     return redirect(url_for('admin_panel'))
 
 @app.route('/admin/delete_user/<int:user_id>')
@@ -298,7 +241,7 @@ def delete_user(user_id):
     conn.execute("DELETE FROM users WHERE id=?", (user_id,))
     conn.commit()
     conn.close()
-    flash("Kullanıcı silindi.", "success")
+    flash("Silindi.", "success")
     return redirect(url_for('admin_panel'))
 
 @app.route('/admin/edit_user', methods=['POST'])
@@ -321,7 +264,6 @@ def edit_user():
     flash("Güncellendi.", "success")
     return redirect(url_for('admin_panel'))
 
-# --- APP ROUTES ---
 @app.route('/analyze')
 @login_required
 def analyze_page():
@@ -345,23 +287,22 @@ def dashboard_page():
     conn.close()
     return render_template('dashboard.html', pending=pending, finished=finished, current_user=current_user)
 
-# --- API ROTALARI ---
-
+# --- API ---
 @app.route('/api/get_fixtures', methods=['POST'])
 def get_fixtures():
     api_key = request.headers.get('X-Api-Key')
     if api_key != BOT_API_KEY:
-        if not current_user.is_authenticated:
-            return jsonify({"success": False, "msg": "Yetkisiz Erişim!"}), 401
+        if not current_user.is_authenticated: return jsonify({"success": False, "msg": "Yetkisiz"}), 401
 
     data = request.json
     league_id = LEAGUE_MAP.get(data.get('league'))
-    if not league_id: return jsonify({"success": False, "msg": "Lig yok"}), 400
+    if not league_id: return jsonify({"success": False}), 400
     try:
-        # Fikstür çekerken de yeni header'ı kullan
-        r_s = requests.get(f"https://api.sofascore.com/api/v1/unique-tournament/{league_id}/seasons", headers=HEADERS)
+        # Fikstür için de cloudscraper
+        scraper = cloudscraper.create_scraper()
+        r_s = scraper.get(f"https://api.sofascore.com/api/v1/unique-tournament/{league_id}/seasons")
         sid = r_s.json()['seasons'][0]['id']
-        r_m = requests.get(f"https://api.sofascore.com/api/v1/unique-tournament/{league_id}/season/{sid}/events/next/0", headers=HEADERS)
+        r_m = scraper.get(f"https://api.sofascore.com/api/v1/unique-tournament/{league_id}/season/{sid}/events/next/0")
         events = r_m.json().get('events', [])
         fixtures = []
         for e in events:
@@ -374,8 +315,7 @@ def get_fixtures():
 def api_analyze():
     api_key = request.headers.get('X-Api-Key')
     if api_key != BOT_API_KEY:
-        if not current_user.is_authenticated:
-            return jsonify({"error": "Yetkisiz Erişim!"}), 401
+        if not current_user.is_authenticated: return jsonify({"error": "Yetkisiz"}), 401
 
     data = request.json
     league = data.get('league')
@@ -386,7 +326,7 @@ def api_analyze():
     try:
         home_url = TEAMS_DATA[league][home_name]["url"]
         away_url = TEAMS_DATA[league][away_name]["url"]
-    except: return jsonify({"error": "Takım verisi yok"}), 400
+    except: return jsonify({"error": "Takım bulunamadı"}), 400
     
     h_stats = get_sofascore_stats(home_url, True)
     a_stats = get_sofascore_stats(away_url, False)
@@ -445,7 +385,7 @@ def update_score():
     c = conn.cursor()
     c.execute("SELECT prediction_market FROM matches WHERE id=?", (match_id,))
     row = c.fetchone()
-    if not row: return jsonify({"success": False, "msg": "Maç yok"}), 404
+    if not row: return jsonify({"success": False}), 404
     prediction = row[0]
     
     is_win = 0
@@ -474,4 +414,3 @@ def delete_match():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
-
