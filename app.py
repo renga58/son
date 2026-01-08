@@ -116,47 +116,91 @@ TEAMS_DATA = {}
 if os.path.exists(TEAMS_FILE):
     with open(TEAMS_FILE, "r", encoding="utf-8") as f: TEAMS_DATA = json.load(f)
 
-# --- YARDIMCI FONKSİYONLAR ---
-def get_team_id(url):
-    try: return int(re.findall(r"/(\d+)$", url)[0])
-    except: return None
+# --- BU İKİ FONKSİYONU ESKİLERİYLE DEĞİŞTİR ---
 
-# 🔥 GÜNCELLENMİŞ SOFASCORE FONKSİYONU (DEBUG ÖZELLİKLİ) 🔥
+def get_team_id(url):
+    """
+    URL içindeki ID'yi Regex ile garanti şekilde alır.
+    https://www.sofascore.com/tr/football/team/arsenal/42 -> 42 olarak döner.
+    """
+    try:
+        # 1. Linkin sonundaki boşlukları temizle
+        url = url.strip()
+        
+        # 2. Regex ile linkin sonundaki sayıyı yakala (En sağlam yöntem)
+        # Bu kod "/12345" veya "/12345/" şeklindeki her şeyi bulur.
+        match = re.search(r'/(\d+)(?:/)?$', url)
+        
+        if match:
+            found_id = int(match.group(1))
+            # print(f"🆔 ID BULUNDU: {found_id} (Linkten: {url})") # İstersen bunu açıp loga bakabilirsin
+            return found_id
+        else:
+            print(f"❌ ID BULUNAMADI: {url} linkinde sayı yok.")
+            return None
+    except Exception as e:
+        print(f"❌ ID AYIKLAMA HATASI: {str(e)}")
+        return None
+
 def get_sofascore_stats(team_url, is_home):
     tid = get_team_id(team_url)
+    
+    # Varsayılan değerler (Veri çekemezsek 1-1 çıkmasının sebebi bu)
     default = {"gf": 1.3, "ga": 1.3, "form": 1.0}
     
-    print(f"🔍 İNCELENİYOR: ID={tid} - URL={team_url}") # LOG
-
-    if not tid: 
-        print("❌ HATA: Takım ID'si URL'den alınamadı.")
+    if not tid:
+        print(f"⚠️ ID YOK: {team_url} için ID bulunamadı, varsayılan dönülüyor.")
         return default
         
     try:
+        # API URL'si
         url = f"https://api.sofascore.com/api/v1/team/{tid}/performance"
-        r = requests.get(url, headers=HEADERS, timeout=10)
         
+        # Sofascore'u kandıran Chrome Başlıkları
+        fake_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://www.sofascore.com/",
+            "Origin": "https://www.sofascore.com",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
+        }
+
+        # İsteği at (Timeout 15 saniye)
+        r = requests.get(url, headers=fake_headers, timeout=15)
+        
+        if r.status_code == 403:
+            print(f"⛔ ENGEL (403): Sofascore VDS IP'sini engelledi. ID: {tid}")
+            return default
+            
         if r.status_code != 200:
-            print(f"❌ HATA: Sofascore engelledi! Kod: {r.status_code}")
+            print(f"❌ API HATASI: Kod {r.status_code} - ID: {tid}")
             return default
             
         data = r.json()
-        matches = data.get("events", [])[:10]
+        matches = data.get("events", [])[:10] # Son 10 maçı al
         
-        if not matches: 
-            print("⚠️ UYARI: Bu takımın son maçı yok.")
+        if not matches:
+            print(f"⚠️ MAÇ YOK: ID {tid} için maç verisi gelmedi.")
             return default
             
+        # İstatistik Hesaplama
         gf, ga, pts = 0, 0, 0
         match_count = len(matches)
         
         for e in matches:
-            h_s = e.get("homeScore",{}).get("current",0)
-            a_s = e.get("awayScore",{}).get("current",0)
+            if "homeScore" not in e or "awayScore" not in e: continue
             
-            if e["homeTeam"]["id"] == tid: my, opp = h_s, a_s
-            else: my, opp = a_s, h_s
-            gf += my; ga += opp
+            h_s = e["homeScore"].get("current", 0)
+            a_s = e["awayScore"].get("current", 0)
+            
+            if e["homeTeam"]["id"] == tid: 
+                my, opp = h_s, a_s
+            else: 
+                my, opp = a_s, h_s
+                
+            gf += my
+            ga += opp
+            
             if my > opp: pts += 3
             elif my == opp: pts += 1
             
@@ -165,7 +209,8 @@ def get_sofascore_stats(team_url, is_home):
             "ga": ga / match_count,
             "form": 0.8 + (pts / match_count / 3) * 0.4
         }
-        print(f"✅ VERİ ALINDI: GF={stats['gf']}, GA={stats['ga']}")
+        
+        # print(f"✅ İSTATİSTİK ALINDI: ID {tid} -> GF: {stats['gf']:.2f}")
         return stats
 
     except Exception as e:
@@ -429,3 +474,4 @@ def delete_match():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
