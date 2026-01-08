@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="no-referrer">
+    <title>FlashOdds Pro - Han Analiz</title>
+    
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+    
+    <script>
+        // Sayfa önbellekten (geri tuşuyla) yüklenirse zorla yenile
+        window.onpageshow = function(event) {
+            if (event.persisted || (window.performance && window.performance.navigation.type === 2)) {
+                window.location.reload();
+            }
+        };
+    </script>
+
+    <style>
+        /* LOGO AYARLARI (Zorunlu) */
+        .team-logo {
+            width: 25px !important;       
+            height: 25px !important;      
+            margin-right: 10px;           
+            vertical-align: middle;       
+            object-fit: contain;          
+            display: inline-block !important;
+            background-color: #fff; /* Şeffaf logolar için arka plan */
+            border-radius: 4px;
+            padding: 1px;
+        }
+
+        /* Select2 Satır Yüksekliği */
+        .select2-container .select2-selection--single {
+            height: 45px !important;
+            display: flex !important;
+            align-items: center !important;
+        }
+        .select2-container--default .select2-selection--single .select2-selection__rendered {
+            line-height: 45px !important;
+            display: flex !important;
+            align-items: center !important;
+            width: 100%;
+        }
+
+        /* Oran Paneli */
+        .odds-container {
+            background: #313244;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            border: 1px solid #45475a;
+        }
+        .odds-row { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; }
+        .odds-input {
+            width: 100%; padding: 8px; background: #1e1e2e; 
+            border: 1px solid #585b70; color: white; border-radius: 4px;
+            text-align: center;
+        }
+        .details-summary { cursor: pointer; color: #f9e2af; font-weight: bold; padding: 10px 0; }
+
+        /* Fikstür Alanı */
+        #fixture-list tr:hover { background-color: #45475a; }
+        .btn-select-match {
+            background-color: #89b4fa; color: #1e1e2e; border: none;
+            padding: 5px 10px; border-radius: 4px; cursor: pointer; font-weight: bold;
+            font-size: 12px;
+        }
+        .btn-select-match:hover { background-color: #b4befe; }
+    </style>
+</head>
+<body>
+    <body>
+        <div style="
+            width: 100%;
+            box-sizing: border-box;
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            padding: 15px 30px; 
+            background-color: #1e1e2e; 
+            border-bottom: 2px solid #45475a; 
+            margin-bottom: 20px;
+            ">
+            
+            <div style="display: flex; gap: 10px;">
+                <a href="/dashboard" style="
+                    background-color: #89b4fa; 
+                    color: #1e1e2e; 
+                    padding: 10px 20px; 
+                    border-radius: 6px; 
+                    text-decoration: none; 
+                    font-weight: bold;
+                    display: flex; align-items: center; gap: 8px;">
+                    📊 Dashboard
+                </a>
+    
+                {% if current_user.role == 'admin' %}
+                <a href="/admin" style="
+                    background-color: #fab387; 
+                    color: #1e1e2e; 
+                    padding: 10px 20px; 
+                    border-radius: 6px; 
+                    text-decoration: none; 
+                    font-weight: bold;
+                    display: flex; align-items: center; gap: 8px;">
+                    👑 Admin Paneli
+                </a>
+                {% endif %}
+            </div>
+    
+            <div style="display: flex; align-items: center; gap: 15px;">
+                <div style="display: flex; align-items: center; gap: 10px; background: #313244; padding: 5px 15px; border-radius: 20px; border: 1px solid #45475a;">
+                    <img src="{{ current_user.logo }}" 
+                         onerror="this.src='https://cdn-icons-png.flaticon.com/512/149/149071.png'"
+                         style="width: 30px; height: 30px; border-radius: 50%; object-fit: cover; border: 1px solid #cdd6f4;">
+                    <span style="color: #cdd6f4; font-weight: bold; font-size: 14px;">{{ current_user.username }}</span>
+                </div>
+    
+                <a href="/logout" style="
+                    background-color: #f38ba8; 
+                    color: #1e1e2e; 
+                    padding: 8px 15px; 
+                    border-radius: 6px; 
+                    text-decoration: none; 
+                    font-weight: bold;
+                    font-size: 14px;
+                    border: 1px solid #eba0ac;">
+                    Çıkış 🚪
+                </a>
+            </div>
+        </div>
+    
+        <h1>⚽ FlashOdds Pro <span style="font-size:14px; color:#a6e3a1;">v4.0 (Secure)</span></h1>
+
+    <div style="width: 100%; max-width: 600px;">
+        
+        <label>Lig Seçiniz:</label>
+        <div style="display:flex; gap:10px; align-items:center;">
+            <select id="league" class="searchable" style="flex:1;"></select>
+            <button id="btnFetchFixtures" style="width:auto; margin-top:5px; background:#fab387; color:#1e1e2e; padding:10px; border:none; border-radius:4px; cursor:pointer; font-weight:bold;">📅 Fikstür</button>
+        </div>
+
+        <div id="fixture-area" style="display:none; margin:15px 0; background:#313244; padding:10px; border-radius:8px; border:1px solid #45475a;">
+            <h4 style="margin:0 0 10px 0; color:#f9e2af; border-bottom:1px solid #45475a; padding-bottom:5px;">Haftanın Maçları</h4>
+            <div id="fixture-list" style="max-height:250px; overflow-y:auto;"></div>
+        </div>
+
+        <div style="display:flex; gap:10px; margin-top:15px;">
+            <div style="flex:1;">
+                <label>Ev Sahibi:</label>
+                <select id="home" class="searchable"></select>
+            </div>
+            <div style="flex:1;">
+                <label>Deplasman:</label>
+                <select id="away" class="searchable"></select>
+            </div>
+        </div>
+
+        <details class="odds-container">
+            <summary class="details-summary">📉 Oran Analizi Ekle (Tıkla Aç)</summary>
+            
+            <div class="odds-row">
+                <span style="width:50px; font-weight:bold;">MS 1:</span>
+                <input type="number" step="0.01" id="ms1_open" class="odds-input" placeholder="Açılış">
+                <input type="number" step="0.01" id="ms1_close" class="odds-input" placeholder="Kapanış">
+            </div>
+            <div class="odds-row">
+                <span style="width:50px; font-weight:bold;">MS X:</span>
+                <input type="number" step="0.01" id="msx_open" class="odds-input" placeholder="Açılış">
+                <input type="number" step="0.01" id="msx_close" class="odds-input" placeholder="Kapanış">
+            </div>
+            <div class="odds-row">
+                <span style="width:50px; font-weight:bold;">MS 2:</span>
+                <input type="number" step="0.01" id="ms2_open" class="odds-input" placeholder="Açılış">
+                <input type="number" step="0.01" id="ms2_close" class="odds-input" placeholder="Kapanış">
+            </div>
+            <hr style="border-color:#45475a;">
+            <div class="odds-row">
+                <span style="width:50px; font-weight:bold;">KG V:</span>
+                <input type="number" step="0.01" id="kg_var_open" class="odds-input" placeholder="Açılış">
+                <input type="number" step="0.01" id="kg_var_close" class="odds-input" placeholder="Kapanış">
+            </div>
+             <div class="odds-row">
+                <span style="width:50px; font-weight:bold;">KG Y:</span>
+                <input type="number" step="0.01" id="kg_yok_open" class="odds-input" placeholder="Açılış">
+                <input type="number" step="0.01" id="kg_yok_close" class="odds-input" placeholder="Kapanış">
+            </div>
+            <hr style="border-color:#45475a;">
+            <div class="odds-row">
+                <span style="width:50px; font-weight:bold;">2.5 Ü:</span>
+                <input type="number" step="0.01" id="ust_open" class="odds-input" placeholder="Açılış">
+                <input type="number" step="0.01" id="ust_close" class="odds-input" placeholder="Kapanış">
+            </div>
+             <div class="odds-row">
+                <span style="width:50px; font-weight:bold;">2.5 A:</span>
+                <input type="number" step="0.01" id="alt_open" class="odds-input" placeholder="Açılış">
+                <input type="number" step="0.01" id="alt_close" class="odds-input" placeholder="Kapanış">
+            </div>
+        </details>
+
+        <button id="analyzeBtn">🧠 DETAYLI ANALİZ ET</button>
+
+        <div id="results" style="display:none;"></div>
+    </div>
+
+    <script id="teams-data" type="application/json">
+        {{ teams | tojson | safe }}
+    </script>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+
+    <script>
+        // Veriyi çek
+        const teamsDataElement = document.getElementById('teams-data');
+        const teamsData = JSON.parse(teamsDataElement.textContent);
+        
+        // Elementler
+        const leagueSelect = $('#league');
+        const homeSelect = $('#home');
+        const awaySelect = $('#away');
+        const analyzeBtn = document.getElementById("analyzeBtn");
+        const resultsDiv = document.getElementById("results");
+
+        // --- RESİM GÖSTERME FONKSİYONU ---
+        function formatTeam(state) {
+            if (!state.id) return state.text;
+            
+            // Native yöntemle attribute oku
+            let logoUrl = $(state.element).attr('data-logo'); 
+            
+            if (!logoUrl || logoUrl === "" || logoUrl === "undefined") {
+                return state.text;
+            }
+
+            // onerror: Resim yüklenemezse gizlenir
+            return $(`<span><img src="${logoUrl}" class="team-logo" onerror="this.style.display='none'" /> ${state.text}</span>`);
+        }
+
+        // Select2 Başlat
+        $(document).ready(function() {
+            $('.searchable').select2({
+                width: '100%',
+                templateResult: formatTeam,
+                templateSelection: formatTeam
+            });
+        });
+
+        // 1. Ligleri Yükle
+        for (let leagueName in teamsData) {
+            let option = new Option(leagueName, leagueName, false, false);
+            leagueSelect.append(option);
+        }
+
+        // 2. Takımları Yükle (GARANTİ YÖNTEM - Native Element)
+        function populateTeams() {
+            const selectedLeague = leagueSelect.val();
+            const teamList = teamsData[selectedLeague];
+
+            // Önce temizle
+            homeSelect.empty();
+            awaySelect.empty();
+
+            if (teamList) {
+                teamList.forEach(t => {
+                    // Ev Sahibi Option
+                    let hOpt = document.createElement("option");
+                    hOpt.value = t.name;
+                    hOpt.text = t.name;
+                    hOpt.setAttribute("data-logo", t.logo);
+                    homeSelect.append(hOpt);
+
+                    // Deplasman Option
+                    let aOpt = document.createElement("option");
+                    aOpt.value = t.name;
+                    aOpt.text = t.name;
+                    aOpt.setAttribute("data-logo", t.logo);
+                    awaySelect.append(aOpt);
+                });
+                
+                // Varsayılan olarak 2. takımı seç
+                if(teamList.length > 1) {
+                    awaySelect.val(teamList[1].name).trigger('change');
+                }
+            }
+            
+            // Select2'ye güncellemesini söyle
+            homeSelect.trigger('change');
+            awaySelect.trigger('change');
+        }
+
+        leagueSelect.on('select2:select', populateTeams);
+        populateTeams(); 
+
+        // --- FİKSTÜR ÇEKME İŞLEMİ (OTOMASYON) ---
+        const btnFetchFixtures = document.getElementById("btnFetchFixtures");
+        const fixtureArea = document.getElementById("fixture-area");
+        const fixtureList = document.getElementById("fixture-list");
+
+        btnFetchFixtures.addEventListener("click", async () => {
+            const league = leagueSelect.val();
+            btnFetchFixtures.disabled = true;
+            btnFetchFixtures.innerText = "⏳...";
+
+            try {
+                const resp = await fetch("/api/get_fixtures", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({ league: league })
+                });
+                
+                const data = await resp.json();
+                
+                if (!data.success) {
+                    alert("Hata: " + data.msg);
+                    return;
+                }
+
+                fixtureList.innerHTML = ""; 
+                
+                if(data.fixtures.length === 0) {
+                    fixtureList.innerHTML = "<p style='padding:10px; color:#bac2de;'>Bu hafta planlanmış maç bulunamadı.</p>";
+                } else {
+                    let html = '<table style="width:100%; border-collapse:collapse; font-size:14px;">';
+                    data.fixtures.forEach(match => {
+                        html += `
+                            <tr style="border-bottom:1px solid #45475a;">
+                                <td style="padding:10px; color:#bac2de; width:20%;">${match.date}</td>
+                                <td style="padding:10px;">
+                                    <span style="color:#cdd6f4;">${match.home}</span> 
+                                    <span style="font-size:11px; color:#a6adc8; margin:0 5px;">vs</span> 
+                                    <span style="color:#cdd6f4;">${match.away}</span>
+                                </td>
+                                <td style="text-align:right; padding:10px;">
+                                    <button class="btn-select-match" onclick="selectMatch('${match.home}', '${match.away}')">
+                                        Seç ⚡
+                                    </button>
+                                </td>
+                            </tr>
+                        `;
+                    });
+                    html += '</table>';
+                    fixtureList.innerHTML = html;
+                }
+                
+                fixtureArea.style.display = "block";
+
+            } catch (err) {
+                console.error(err);
+                alert("Bağlantı hatası!");
+            } finally {
+                btnFetchFixtures.disabled = false;
+                btnFetchFixtures.innerText = "📅 Fikstür";
+            }
+        });
+
+        // Global Maç Seçme Fonksiyonu
+        // --- AKILLI TAKIM SEÇİCİ (Smart Match) ---
+        window.selectMatch = function(apiHome, apiAway) {
+            
+            // Yardımcı Fonksiyon: En iyi eşleşen takımı bul
+            function findBestOption(selectElement, apiName) {
+                // 1. Önce tam eşleşme dene (En garantisi)
+                if (selectElement.find(`option[value="${apiName}"]`).length > 0) {
+                    return apiName;
+                }
+
+                // 2. Bulamazsan 'Benzerlik' araması yap
+                let bestMatch = null;
+                const lowerApiName = apiName.toLowerCase();
+
+                selectElement.find('option').each(function() {
+                    const optVal = $(this).val();
+                    const lowerOptVal = optVal.toLowerCase();
+
+                    // İsimler birbirini içeriyor mu? (Örn: "Galatasaray" vs "Galatasaray A.Ş.")
+                    if (lowerOptVal.includes(lowerApiName) || lowerApiName.includes(lowerOptVal)) {
+                        bestMatch = optVal;
+                        return false; // Döngüden çık
+                    }
+                    
+                    // Kelime kelime kontrol (Örn: "Man City" vs "Manchester City")
+                    const apiWords = lowerApiName.split(" ");
+                    const optWords = lowerOptVal.split(" ");
+                    // Eğer ilk kelimeleri tutuyorsa (Man == Man) ve kelime sayısı yakınsa
+                    if(apiWords[0] === optWords[0] && apiWords.length > 0) {
+                         bestMatch = optVal;
+                    }
+                });
+
+                return bestMatch;
+            }
+
+            // Ev Sahibini Bul ve Seç
+            const homeMatch = findBestOption(homeSelect, apiHome);
+            if (homeMatch) {
+                homeSelect.val(homeMatch).trigger('change');
+            } else {
+                console.log(`❌ Eşleşme Bulunamadı (Ev): API'den gelen '${apiHome}' ismi listede yok.`);
+                // Kullanıcıya hissettirmek için kutuyu titret veya kırmızı yap (opsiyonel)
+                alert(`Uyarı: '${apiHome}' takımı senin listende (teams.json) farklı yazılmış olabilir. Elle seçmelisin.`);
+            }
+
+            // Deplasmanı Bul ve Seç
+            const awayMatch = findBestOption(awaySelect, apiAway);
+            if (awayMatch) {
+                awaySelect.val(awayMatch).trigger('change');
+            } else {
+                console.log(`❌ Eşleşme Bulunamadı (Dep): API'den gelen '${apiAway}' ismi listede yok.`);
+            }
+        };
+
+        // 3. ANALİZ İŞLEMİ
+        analyzeBtn.addEventListener("click", async () => {
+            const league = leagueSelect.val();
+            const home = homeSelect.val();
+            const away = awaySelect.val();
+            
+            const oddsData = {
+                ms1_open: document.getElementById('ms1_open').value, ms1_close: document.getElementById('ms1_close').value,
+                msx_open: document.getElementById('msx_open').value, msx_close: document.getElementById('msx_close').value,
+                ms2_open: document.getElementById('ms2_open').value, ms2_close: document.getElementById('ms2_close').value,
+                kg_var_open: document.getElementById('kg_var_open').value, kg_var_close: document.getElementById('kg_var_close').value,
+                kg_yok_open: document.getElementById('kg_yok_open').value, kg_yok_close: document.getElementById('kg_yok_close').value,
+                ust_open: document.getElementById('ust_open').value, ust_close: document.getElementById('ust_close').value,
+                alt_open: document.getElementById('alt_open').value, alt_close: document.getElementById('alt_close').value,
+            };
+
+            analyzeBtn.disabled = true;
+            analyzeBtn.innerText = "⏳ Veriler Çekiliyor...";
+            resultsDiv.style.display = "none";
+
+            try {
+                const resp = await fetch("/api/analyze", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({ league, home, away, odds: oddsData })
+                });
+
+                const data = await resp.json();
+                
+                let html = "<h3>🔥 Analiz Raporu</h3>";
+                if(data["Tahmini Skor"]) {
+                    html += `<div style="text-align:center; font-size:24px; color:#f9e2af; margin-bottom:20px; border:1px solid #fab387; padding:10px; border-radius:8px;">
+                                🏆 Tahmini Skor: ${data["Tahmini Skor"]}
+                             </div>`;
+                    delete data["Tahmini Skor"];
+                }
+
+                for (const [key, value] of Object.entries(data)) {
+                    html += `
+                        <div style="margin-bottom: 12px;">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <span style="font-weight:bold;">${key}</span>
+                                <span>
+                                    <span style="font-size:12px; font-weight:bold; color:#f9e2af; margin-right:5px;">${value.label}</span>
+                                    %${value.percent}
+                                </span>
+                            </div>
+                            <div style="background:#45475a; height:10px; border-radius:5px; margin-top:4px;">
+                                <div style="background:${value.percent > 60 ? '#a6e3a1' : '#89b4fa'}; width:${value.percent}%; height:100%; border-radius:5px;"></div>
+                            </div>
+                        </div>
+                    `;
+                }
+                resultsDiv.innerHTML = html;
+                resultsDiv.style.display = "block";
+
+            } catch (err) {
+                alert("Hata: " + err);
+            } finally {
+                analyzeBtn.disabled = false;
+                analyzeBtn.innerText = "🧠 DETAYLI ANALİZ ET";
+            }
+        });
+    </script>
+</body>
+</html>
