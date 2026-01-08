@@ -13,35 +13,22 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, log
 app = Flask(__name__)
 
 # --- AYARLAR VE GÜVENLİK ---
-# 1. Web sitesi oturum güvenliği için (Tarayıcı çerezleri)
 app.secret_key = 'bu_cok_gizli_bir_anahtar_flashodds_pro_v4'
-
-# 2. Telegram Botunun siteye girmesi için VIP Şifresi (Bot.py ile AYNI olmalı)
-BOT_API_KEY = "190358"
-
+BOT_API_KEY = "190358" # Botun VIP Şifresi
 DB_NAME = "maclar.db"
 TEAMS_FILE = "teams.json"
 
-# --- FLASK LOGIN KURULUMU ---
-login_manager = LoginManager()
-login_manager.init_app(app)
-login_manager.login_view = 'login' # Giriş yapılmamışsa buraya yönlendir
-
-# --- BROWSER CACHE ENGELLEME (Geri Tuşu Koruması) ---
-@app.after_request
-def add_header(response):
-    """Tarayıcının sayfaları hafızaya almasını engeller."""
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, public, max-age=0"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    return response
-
-# --- SOFASCORE AYARLARI ---
+# --- MASKELENMİŞ HEADERS (Chrome Gibi Görünmesi İçin) ---
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
     "Referer": "https://www.sofascore.com/",
     "Origin": "https://www.sofascore.com",
-    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Connection": "keep-alive",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-site",
     "Cache-Control": "max-age=0"
 }
 
@@ -53,6 +40,18 @@ LEAGUE_MAP = {
     "Serie B": 55, "2. Bundesliga": 44, "Liga Portugal": 238,
     "Romanya SuperLiga": 128, "İsviçre Super League": 77
 }
+
+# --- FLASK LOGIN ---
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'
+
+@app.after_request
+def add_header(response):
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, public, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 # --- KULLANICI MODELİ ---
 class User(UserMixin):
@@ -71,26 +70,22 @@ def load_user(user_id):
     user = c.fetchone()
     conn.close()
     if user:
-        # id, username, password, role, logo
         return User(id=user[0], username=user[1], password=user[2], role=user[3], logo=user[4])
     return None
 
-# --- ADMIN KONTROL DECORATOR ---
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not current_user.is_authenticated or current_user.role != 'admin':
-            flash("Bu sayfaya erişim yetkiniz yok!", "error")
+            flash("Yetkisiz alan!", "error")
             return redirect(url_for('analyze_page'))
         return f(*args, **kwargs)
     return decorated_function
 
-# --- VERİTABANI BAŞLATMA ---
+# --- VERİTABANI ---
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    
-    # Maçlar Tablosu
     c.execute('''CREATE TABLE IF NOT EXISTS matches 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   date TEXT, league TEXT, home TEXT, away TEXT, 
@@ -99,7 +94,6 @@ def init_db():
                   status TEXT DEFAULT 'pending', result INTEGER DEFAULT -1,
                   all_probs TEXT)''')
     
-    # Kullanıcılar Tablosu
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   username TEXT UNIQUE,
@@ -107,7 +101,6 @@ def init_db():
                   role TEXT DEFAULT 'user',
                   logo TEXT DEFAULT '')''')
     
-    # Varsayılan Admini Kontrol Et
     c.execute("SELECT * FROM users WHERE username = 'kemir'")
     if not c.fetchone():
         hashed_pw = generate_password_hash("2000532694Aa/")
@@ -115,7 +108,6 @@ def init_db():
         c.execute("INSERT INTO users (username, password, role, logo) VALUES (?, ?, 'admin', ?)", 
                   ('kemir', hashed_pw, admin_logo))
         print("👑 Admin kullanıcısı (kemir) oluşturuldu!")
-    
     conn.commit()
     conn.close()
 
@@ -129,27 +121,56 @@ def get_team_id(url):
     try: return int(re.findall(r"/(\d+)$", url)[0])
     except: return None
 
+# 🔥 GÜNCELLENMİŞ SOFASCORE FONKSİYONU (DEBUG ÖZELLİKLİ) 🔥
 def get_sofascore_stats(team_url, is_home):
     tid = get_team_id(team_url)
     default = {"gf": 1.3, "ga": 1.3, "form": 1.0}
-    if not tid: return default
+    
+    print(f"🔍 İNCELENİYOR: ID={tid} - URL={team_url}") # LOG
+
+    if not tid: 
+        print("❌ HATA: Takım ID'si URL'den alınamadı.")
+        return default
+        
     try:
-        r = requests.get(f"https://www.sofascore.com/api/v1/team/{tid}/performance", headers=HEADERS, timeout=5)
-        if r.status_code!=200: return default
+        url = f"https://api.sofascore.com/api/v1/team/{tid}/performance"
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        
+        if r.status_code != 200:
+            print(f"❌ HATA: Sofascore engelledi! Kod: {r.status_code}")
+            return default
+            
         data = r.json()
         matches = data.get("events", [])[:10]
-        if not matches: return default
+        
+        if not matches: 
+            print("⚠️ UYARI: Bu takımın son maçı yok.")
+            return default
+            
         gf, ga, pts = 0, 0, 0
+        match_count = len(matches)
+        
         for e in matches:
             h_s = e.get("homeScore",{}).get("current",0)
             a_s = e.get("awayScore",{}).get("current",0)
-            if e["homeTeam"]["id"]==tid: my, opp = h_s, a_s
+            
+            if e["homeTeam"]["id"] == tid: my, opp = h_s, a_s
             else: my, opp = a_s, h_s
-            gf+=my; ga+=opp
-            if my>opp: pts+=3
-            elif my==opp: pts+=1
-        return {"gf": gf/len(matches), "ga": ga/len(matches), "form": 0.8+(pts/len(matches)/3)*0.4}
-    except: return default
+            gf += my; ga += opp
+            if my > opp: pts += 3
+            elif my == opp: pts += 1
+            
+        stats = {
+            "gf": gf / match_count,
+            "ga": ga / match_count,
+            "form": 0.8 + (pts / match_count / 3) * 0.4
+        }
+        print(f"✅ VERİ ALINDI: GF={stats['gf']}, GA={stats['ga']}")
+        return stats
+
+    except Exception as e:
+        print(f"❌ KRİTİK HATA: {str(e)}")
+        return default
 
 def poisson(xg, g):
     return (math.exp(-xg) * xg**g) / math.factorial(g)
@@ -160,36 +181,29 @@ def calculate_odds_impact(o, c):
         return ((o-c)/o)*0.5 if o>0 else 0
     except: return 0
 
-# --- SAYFA ROTALARI (ROUTES) ---
+# --- SAYFA ROTALARI ---
 
 @app.route('/')
 def index():
-    if current_user.is_authenticated:
-        return redirect(url_for('analyze_page'))
+    if current_user.is_authenticated: return redirect(url_for('analyze_page'))
     return redirect(url_for('login'))
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    if current_user.is_authenticated:
-        return redirect(url_for('analyze_page'))
-
+    if current_user.is_authenticated: return redirect(url_for('analyze_page'))
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
         c.execute("SELECT * FROM users WHERE username = ?", (username,))
         user_data = c.fetchone()
         conn.close()
-        
         if user_data and check_password_hash(user_data[2], password):
             user = User(id=user_data[0], username=user_data[1], password=user_data[2], role=user_data[3], logo=user_data[4])
             login_user(user)
             return redirect(url_for('analyze_page'))
-        else:
-            flash('Kullanıcı adı veya şifre yanlış!', 'error')
-            
+        else: flash('Hatalı giriş!', 'error')
     return render_template('login.html')
 
 @app.route('/logout')
@@ -286,21 +300,20 @@ def dashboard_page():
     conn.close()
     return render_template('dashboard.html', pending=pending, finished=finished, current_user=current_user)
 
-# --- API ROTALARI (BOT İÇİN GÜVENLİK EKLİ) ---
+# --- API ROTALARI ---
 
 @app.route('/api/get_fixtures', methods=['POST'])
 def get_fixtures():
-    # 1. API KEY KONTROLÜ (Bot İçin)
     api_key = request.headers.get('X-Api-Key')
     if api_key != BOT_API_KEY:
-        # 2. LOGIN KONTROLÜ (İnsan İçin)
         if not current_user.is_authenticated:
-            return jsonify({"success": False, "msg": "Yetkisiz Erişim! VIP Kartı Yok."}), 401
+            return jsonify({"success": False, "msg": "Yetkisiz Erişim!"}), 401
 
     data = request.json
     league_id = LEAGUE_MAP.get(data.get('league'))
     if not league_id: return jsonify({"success": False, "msg": "Lig yok"}), 400
     try:
+        # Fikstür çekerken de yeni header'ı kullan
         r_s = requests.get(f"https://api.sofascore.com/api/v1/unique-tournament/{league_id}/seasons", headers=HEADERS)
         sid = r_s.json()['seasons'][0]['id']
         r_m = requests.get(f"https://api.sofascore.com/api/v1/unique-tournament/{league_id}/season/{sid}/events/next/0", headers=HEADERS)
@@ -314,7 +327,6 @@ def get_fixtures():
 
 @app.route('/api/analyze', methods=['POST'])
 def api_analyze():
-    # GÜVENLİK KONTROLÜ
     api_key = request.headers.get('X-Api-Key')
     if api_key != BOT_API_KEY:
         if not current_user.is_authenticated:
@@ -414,7 +426,6 @@ def delete_match():
     conn.close()
     return jsonify({"success": True})
 
-# --- RENDER PORT AYARI ---
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
