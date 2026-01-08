@@ -127,7 +127,11 @@ def api_analyze():
     final_results["Tahmini Skor"] = f"{round(hxg)} - {round(axg)}"
     return jsonify(final_results)
 
-# --- BAŞLAT ---
+# --- EN ALTA BUNU YAPIŞTIR ---
 if __name__ == '__main__':
-    # Render PORT ayarı değil, direkt 5000 portu
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    from waitress import serve
+    print("🌍 Site 80 portunda yayına açılıyor...")
+    print("👉 Admin Paneli: http://localhost/admin")
+    # Port 80 yapıyoruz ki linkin sonuna :5000 yazmakla uğraşma
+    serve(app, host='0.0.0.0', port=80)
+
